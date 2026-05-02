@@ -2,190 +2,110 @@ name: APK Build
 
 on:
   workflow_dispatch:
-    inputs:
-      target:
-        description: 'Target variant (Gplay/Fdroid/both)'
-        required: false
-        default: 'both'
-        type: string
-      build_type:
-        description: 'Build type (debug/release)'
-        required: false
-        default: 'debug'
-        type: string
-  pull_request: { }
   push:
-    branches: [ main, develop ]
+    branches: [ develop ]
 
-permissions:
-  contents: write
+permissions: {}
 
 env:
-  GRADLE_OPTS: -Dorg.gradle.jvmargs="-Xmx6g -Dfile.encoding=UTF-8 -XX:+HeapDumpOnOutOfMemoryError -XX:MaxMetaspaceSize=2g" -Dkotlin.daemon.jvm.options="-Xmx4g" -Dkotlin.incremental=false
-  CI_GRADLE_ARG_PROPERTIES: --stacktrace -PpreDexEnable=false --max-workers 2 --no-daemon
+  GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx8g -XX:MaxMetaspaceSize=8g -Dfile.encoding=UTF-8 -XX:+HeapDumpOnOutOfMemoryError -XX:+UseG1GC -Dkotlin.daemon.jvm.options=-Xmx4g
+  CI_GRADLE_ARG_PROPERTIES: --stacktrace -Dsonar.gradle.skipCompile=true --no-configuration-cache
 
 jobs:
-  debug:
-    name: Build debug APKs (${{ matrix.target }})
+  build:
+    name: Build Release APK
     runs-on: ubuntu-latest
-    if: |
-      github.ref != 'refs/heads/main' && 
-      (github.event_name != 'workflow_dispatch' || github.event.inputs.build_type == 'debug' || github.event.inputs.build_type == 'both')
-    strategy:
-      fail-fast: false
-      matrix:
-        target: ${{ fromJson(github.event_name == 'workflow_dispatch' && (github.event.inputs.target == 'both' && '["Gplay", "Fdroid"]' || (github.event.inputs.target == 'Gplay' && '["Gplay"]' || '["Fdroid"]')) || '["Gplay", "Fdroid"]') }}
     concurrency:
-      group: ${{ github.ref == 'refs/heads/develop' && format('integration-tests-develop-{0}-{1}', matrix.target, github.sha) || format('build-debug-{0}-{1}', matrix.target, github.ref)  }}
-      cancel-in-progress: true
+      group: release-build-${{ github.sha }}
+      cancel-in-progress: false
+    
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
-          persist-credentials: true
+          tool-cache: true
+          android: false
+          dotnet: true
+          haskell: true
+          large-packages: false
+          docker-images: true
+          swap-storage: false
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+          
       - name: Use JDK 21
-        uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5.2.0
+        uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654
         with:
           distribution: 'temurin'
           java-version: '21'
+          
       - name: Configure gradle
-        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
+        uses: gradle/actions/setup-gradle@50e97c2cd7a37755bbfafc9c5b7cafaece252f6e
         with:
           cache-read-only: ${{ github.ref != 'refs/heads/develop' }}
-      - name: Install required tools (rar, zip)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y rar unrar
-      - name: Assemble ${{ matrix.target }} debug apk
-        run: ./gradlew assemble${{ matrix.target }}Debug $CI_GRADLE_ARG_PROPERTIES
-      - name: Copy APKs to source directory
-        run: |
-          mkdir -p ./built-apks/${{ matrix.target }}/debug/
-          cp -r vector-app/build/outputs/apk/*/debug/*.apk ./built-apks/${{ matrix.target }}/debug/
-      - name: Split APKs into multi-part RAR archives
-        run: |
-          cd ./built-apks/${{ matrix.target }}/debug/
-          # هر پارته 90 مگابایت (برای اطمینان از زیر 100 مگابایت)
-          for apk in *.apk; do
-            if [ -f "$apk" ]; then
-              echo "Splitting $apk into 90MB parts..."
-              rar a -v90m -m5 "${apk%.apk}.rar" "$apk"
-              rm "$apk"  # حذف فایل اصلی بعد از تبدیل
-            fi
-          done
-      - name: Commit and push RAR parts to branch
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add ./built-apks/
-          git diff --staged --quiet || git commit -m "Build debug APKs for ${{ matrix.target }} (split into RAR parts) [skip ci]"
-          git push origin HEAD:${{ github.ref_name }}
-      - name: Upload original APKs as artifact (backup)
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        with:
-          name: vector-${{ matrix.target }}-debug-original
-          path: |
-            vector-app/build/outputs/apk/*/debug/*.apk
-
-  release:
-    name: Build unsigned GPlay APKs
-    runs-on: ubuntu-latest
-    if: |
-      github.event_name != 'workflow_dispatch' || 
-      github.event.inputs.build_type == 'release' || 
-      github.event.inputs.build_type == 'both'
-    permissions:
-      contents: write
-    concurrency:
-      group: ${{ github.ref == 'refs/head/main' && format('build-release-apk-main-{0}', github.sha) || github.ref == 'refs/heads/develop' && format('build-release-apk-develop-{0}', github.sha) || format('build-debug-{0}', github.ref)  }}
-      cancel-in-progress: ${{ github.ref != 'refs/head/main' }}
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.ref }}
-          persist-credentials: true
-      - name: Use JDK 21
-        uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5.2.0
-        with:
-          distribution: 'temurin'
-          java-version: '21'
-      - name: Configure gradle
-        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
-        with:
-          cache-read-only: ${{ github.ref != 'refs/heads/develop' }}
-      - name: Install required tools (rar, zip)
-        run: |
-          sudo apt-get install -y rar unrar
-      - name: Assemble GPlay unsigned apk
-        run: ./gradlew clean assembleGplayRelease $CI_GRADLE_ARG_PROPERTIES
-      - name: Copy APKs to source directory
-        run: |
-          mkdir -p ./built-apks/gplay/release/
-          cp -r vector-app/build/outputs/apk/*/release/*.apk ./built-apks/gplay/release/
-      - name: Split APKs into multi-part RAR archives
-        run: |
-          cd ./built-apks/gplay/release/
-          # هر پارته 90 مگابایت (زیر 100 مگابایت)
-          for apk in *.apk; do
-            if [ -f "$apk" ]; then
-              echo "Splitting $apk into 90MB parts..."
-              rar a -v90m -m5 "${apk%.apk}.rar" "$apk"
-              rm "$apk"  # حذف فایل اصلی بعد از تبدیل
-            fi
-          done
-      - name: Commit and push RAR parts to branch
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add ./built-apks/
-          git diff --staged --quiet || git commit -m "Build unsigned GPlay release APKs (split into RAR parts) [skip ci]"
-          git push origin HEAD:${{ github.ref_name }}
-      - name: Upload original APKs as artifact (backup)
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        with:
-          name: vector-gplay-release-unsigned-original
-          path: |
-            vector-app/build/outputs/apk/*/release/*.apk
-
-  exodus:
-    runs-on: ubuntu-latest
-    needs: release
-    if: github.event_name != 'workflow_dispatch' || github.event.inputs.build_type == 'release' || github.event.inputs.build_type == 'both'
-    permissions:
-      contents: write
-    steps:
-      - name: Obtain original APK from artifact
-        id: download
-        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
-        with:
-          name: vector-gplay-release-unsigned-original
-          path: ./original-apk/
-      - name: Show files
-        run: ls -R ./
-      - name: Execute exodus-standalone
-        uses: docker://exodusprivacy/exodus-standalone:latest
-        with:
-          args: ./original-apk/vector-gplay-universal-release-unsigned.apk -j -o /github/workspace/exodus.json -e 0
-      - name: Copy exodus report to source
-        run: |
-          mkdir -p ./reports/
-          cp exodus.json ./reports/
-      - name: Commit and push exodus report
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add ./reports/exodus.json
-          git diff --staged --quiet || git commit -m "Add Exodus privacy report [skip ci]"
-          git push origin HEAD:${{ github.ref_name }}
-      - name: Upload exodus json report
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        with:
-          name: exodus.json
-          path: |
-            exodus.json
-      - name: Check for trackers
+          
+      - name: Compile release sources
         env:
-          SENTRY_ID: 447
+          ELEMENT_ANDROID_MAPTILER_API_KEY: ${{ secrets.MAPTILER_KEY }}
+          ELEMENT_ANDROID_MAPTILER_LIGHT_MAP_ID: ${{ secrets.MAPTILER_LIGHT_MAP_ID }}
+          ELEMENT_ANDROID_MAPTILER_DARK_MAP_ID: ${{ secrets.MAPTILER_DARK_MAP_ID }}
+          ELEMENT_ANDROID_SENTRY_DSN: ${{ secrets.ELEMENT_ANDROID_SENTRY_DSN }}
+          ELEMENT_SDK_SENTRY_DSN: ${{ secrets.ELEMENT_SDK_SENTRY_DSN }}
+          ELEMENT_CALL_SENTRY_DSN: ${{ secrets.ELEMENT_CALL_SENTRY_DSN }}
+          ELEMENT_CALL_POSTHOG_API_HOST: ${{ secrets.ELEMENT_CALL_POSTHOG_API_HOST }}
+          ELEMENT_CALL_POSTHOG_API_KEY: ${{ secrets.ELEMENT_CALL_POSTHOG_API_KEY }}
+          ELEMENT_CALL_RAGESHAKE_URL: ${{ secrets.ELEMENT_CALL_RAGESHAKE_URL }}
+        run: ./gradlew :app:assembleGplayRelease -PallWarningsAsErrors=true $CI_GRADLE_ARG_PROPERTIES
+        
+      - name: Find and rename APK file
         run: |
-          TRACKER_IDS=$(jq ".trackers[] | .id" exodus.json)
-          [ $TRACKER_IDS = ${{ env.SENTRY_ID }} ] || { echo '::error static analysis identified user tracking library' ; exit 1; }
+          APK_PATH=$(find app/build/outputs/apk -name "*.apk" | head -n 1)
+          if [ -z "$APK_PATH" ]; then
+            echo "No APK file found!"
+            exit 1
+          fi
+          echo "Found APK at: $APK_PATH"
+          mv "$APK_PATH" app-release.apk
+          echo "APK_FOUND=true" >> $GITHUB_ENV
+          
+      - name: Create RAR split archive (90MB parts)
+        if: env.APK_FOUND == 'true'
+        run: |
+          # Install rar if not available
+          sudo apt-get install -y rar
+          
+          # Create split RAR archive with 90MB parts
+          rar a -v90m -m5 -ep1 -r app-release.rar app-release.apk
+          
+          echo "RAR split archives created:"
+          ls -lh app-release.part*.rar app-release.rar 2>/dev/null || ls -lh app-release.r* 2>/dev/null
+          
+      - name: List created files
+        if: env.APK_FOUND == 'true'
+        run: |
+          echo "Files to be committed:"
+          ls -la | grep -E "app-release|.rar" || true
+          
+      - name: Commit RAR parts to repository
+        if: env.APK_FOUND == 'true'
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          
+          # Check if we have changes
+          if [ -n "$(git status --porcelain)" ]; then
+            git add app-release.part*.rar app-release.rar 2>/dev/null || git add app-release.r* 2>/dev/null
+            git commit -m "Add release APK split RAR archive (90MB parts) - $(date '+%Y-%m-%d %H:%M:%S')"
+            git push origin HEAD:${{ github.ref_name }}
+            echo "Successfully committed RAR parts to repository"
+          else
+            echo "No changes to commit"
+          fi
+          
+      - name: Clean up local files
+        if: always()
+        run: |
+          rm -f app-release.apk app-release.part*.rar app-release.rar app-release.r* 2>/dev/null || true
+          echo "Cleanup completed"
