@@ -5,8 +5,9 @@ on:
   push:
     branches: [ develop ]
 
-permissions: {}
-
+permissions:
+  contents: write
+  
 env:
   GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx8g -XX:MaxMetaspaceSize=8g -Dfile.encoding=UTF-8 -XX:+HeapDumpOnOutOfMemoryError -XX:+UseG1GC -Dkotlin.daemon.jvm.options=-Xmx4g
   CI_GRADLE_ARG_PROPERTIES: --stacktrace -Dsonar.gradle.skipCompile=true --no-configuration-cache
@@ -97,19 +98,18 @@ jobs:
           
       - name: Commit RAR parts to repository
         if: env.APK_FOUND == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git config user.name "GitHub Actions"
-          git config user.email "actions@github.com"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           
-          # Pull latest changes first to avoid conflicts
           git pull origin ${{ github.ref_name }} --rebase || true
           
-          # Check if we have changes
           if [ -n "$(git status --porcelain)" ]; then
-            git add *.rar 2>/dev/null || true
-            git commit -m "Add release APK split RAR archive (90MB parts) - $(date '+%Y-%m-%d %H:%M:%S')" || true
-            # Use the built-in GITHUB_TOKEN for authentication
-            git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git HEAD:${{ github.ref_name }} || true
+            git add *.rar
+            git commit -m "Add release APK split RAR archive (90MB parts) - $(date '+%Y-%m-%d %H:%M:%S')"
+            git push https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git HEAD:${{ github.ref_name }}
             echo "Successfully committed RAR parts to repository"
           else
             echo "No changes to commit"
