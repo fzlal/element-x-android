@@ -74,13 +74,20 @@ jobs:
         if: env.APK_FOUND == 'true'
         run: |
           # Install rar if not available
+          sudo apt-get update
           sudo apt-get install -y rar
           
           # Create split RAR archive with 90MB parts
-          rar a -v90m -m5 -ep1 -r app-release.rar app-release.apk
+          rar a -v90m -m5 -ep1 -r app-release.rar app-release.apk || true
           
-          echo "RAR split archives created:"
-          ls -lh app-release.part*.rar app-release.rar 2>/dev/null || ls -lh app-release.r* 2>/dev/null
+          # Check if files were created successfully
+          if ls app-release.part*.rar 1> /dev/null 2>&1 || ls app-release.r* 1> /dev/null 2>&1; then
+            echo "RAR split archives created successfully"
+            ls -lh app-release.part*.rar 2>/dev/null || ls -lh app-release.r* 2>/dev/null
+          else
+            echo "Failed to create RAR archives"
+            exit 1
+          fi
           
       - name: List created files
         if: env.APK_FOUND == 'true'
