@@ -108,7 +108,8 @@ jobs:
           if [ -n "$(git status --porcelain)" ]; then
             git add *.rar 2>/dev/null || true
             git commit -m "Add release APK split RAR archive (90MB parts) - $(date '+%Y-%m-%d %H:%M:%S')" || true
-            git push origin HEAD:${{ github.ref_name }} || true
+            # Use the built-in GITHUB_TOKEN for authentication
+            git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git HEAD:${{ github.ref_name }} || true
             echo "Successfully committed RAR parts to repository"
           else
             echo "No changes to commit"
